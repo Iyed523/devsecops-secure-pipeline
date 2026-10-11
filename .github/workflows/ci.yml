@@ -71,3 +71,17 @@ jobs:
 
       - name: Scan Git history for secrets
         run: gitleaks git --redact=100 --log-opts="--all" --no-banner .
+
+      - name: Install Semgrep
+        run: |
+          python -m venv "$RUNNER_TEMP/semgrep-venv"
+          "$RUNNER_TEMP/semgrep-venv/bin/python" -m pip install --only-binary=:all: "semgrep==1.180.0"
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" --version
+
+      - name: Validate Semgrep rules
+        run: |
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" scan --metrics=off --validate --config .semgrep/python-security.yml
+
+      - name: Semgrep security scan
+        run: |
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" scan --metrics=off --config .semgrep/python-security.yml --error src

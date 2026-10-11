@@ -8,11 +8,11 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 The application currently exposes a health-check endpoint and includes automated tests, Python linting and formatting checks, and locked dependencies with SHA-256 hashes.
 
-GitHub Actions runs automated tests, code-quality checks, Bandit, and pip-audit on pull requests targeting `main` and on pushes to `main`.
+GitHub Actions runs automated tests, Ruff, Bandit, pip-audit, and Gitleaks on pull requests targeting `main` and on pushes to `main`.
 
-PR #5 adds Gitleaks secret scanning to the existing workflow. Its installation and Git history scan were successfully validated in GitHub Actions.
+PR #6 adds Semgrep security scanning with two version-controlled rules. Local validation and GitHub Actions execution have both succeeded: the CI run validated two rules and scanned two Python files with zero findings. PR #6 is awaiting its final security self-review and merge.
 
-**Not yet implemented:** Semgrep, Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
+**Not yet implemented:** Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
 
 ## Technology stack
 
@@ -22,6 +22,7 @@ PR #5 adds Gitleaks secret scanning to the existing workflow. Its installation a
 - Ruff
 - Bandit and pip-audit
 - Gitleaks
+- Semgrep Community Edition
 - pip-tools
 - GitHub Actions
 
@@ -56,7 +57,7 @@ python -m pip install --require-hashes -r requirements-dev.txt
 python -m pip check
 ```
 
-The development requirements include application dependencies as well as testing, code-quality, and Python security-analysis tools. Gitleaks is a separate executable and is not installed by pip.
+The development requirements include application dependencies as well as testing, code-quality, and Python security-analysis tools. Gitleaks is a separate executable, and Semgrep is installed in a separate virtual environment; neither is installed by `requirements-dev.txt`.
 
 ### 4. Run the API
 
@@ -132,11 +133,45 @@ Bandit and pip-audit were validated locally and in GitHub Actions in PR #4. Thei
 
 Bandit detects potentially insecure Python patterns, while pip-audit checks for known dependency vulnerabilities. Neither guarantees the absence of security issues. Dependency auditing requires access to vulnerability data sources.
 
+### Semgrep security scanning
+
+Semgrep complements Bandit with project-specific static security analysis rules.
+
+PR #6 uses Semgrep Community Edition `1.180.0`. Two rules are stored in `.semgrep/python-security.yml`:
+
+- `python-avoid-eval`: detects Python `eval()` calls, which may introduce unsafe dynamic code execution.
+- `fastapi-no-debug`: detects `FastAPI(debug=True)`, which should not be enabled in production.
+
+On Windows, install the pinned Semgrep version in a separate virtual environment outside the repository:
+
+```powershell
+$semgrepDir = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\semgrep-1.180.0"
+python -m venv $semgrepDir
+$semgrepPython = Join-Path $semgrepDir "Scripts\python.exe"
+& $semgrepPython -m pip install --only-binary=:all: "semgrep==1.180.0"
+```
+
+Validate the local rules and scan the application:
+
+```powershell
+$semgrepExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\semgrep-1.180.0\Scripts\semgrep.exe"
+& $semgrepExe scan --metrics=off --validate --config .semgrep/python-security.yml
+& $semgrepExe scan --metrics=off --config .semgrep/python-security.yml --error src
+```
+
+Local validation confirmed that both rules were valid and the application scan found no violations in two Git-tracked Python files. A separate test with an intentionally insecure temporary file triggered both rules and returned exit code `1`. No insecure test code was committed to Git.
+
+The GitHub Actions workflow installs Semgrep `1.180.0` in a separate virtual environment, validates the rules, and scans `src/` with `--error` to make findings blocking. Metrics are disabled with `--metrics=off`.
+
+The PR #6 GitHub Actions run successfully validated both rules and scanned two Git-tracked Python files with zero findings. The scan is limited to files selected by Semgrep and does not guarantee coverage of ignored or untracked files.
+
+The initial rule set is intentionally narrow and is not a comprehensive security audit. Passing the scan does not guarantee the absence of vulnerabilities. Semgrep's version is pinned, but its transitive installation dependencies are not locked with hashes.
+
 ### Git history secret scanning
 
 Gitleaks scans Git history for potential secrets, including API keys and access tokens.
 
-PR #5 uses Gitleaks version `8.30.0`. The GitHub Actions workflow downloads the Linux x64 archive and verifies its pinned SHA-256 checksum before executing the scanner. The PR #5 CI logs confirmed successful checksum verification and version `8.30.0`.
+PR #5 integrated Gitleaks `8.30.0`. GitHub Actions downloads the Linux x64 archive and verifies its pinned SHA-256 checksum before executing the scanner. The PR #5 CI logs confirmed successful checksum verification and version `8.30.0`.
 
 On Windows, after separately installing and verifying Gitleaks `8.30.0` at the path below, run:
 
@@ -147,7 +182,7 @@ $gitleaks = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\gitleaks-8.30.0\gitleaks
 
 The command scans commits reachable through locally available Git references. It does not scan uncommitted working-tree changes. The `--redact=100` option masks detected secret values in the output.
 
-The workflow uses `fetch-depth: 0` to retrieve Git history and runs Gitleaks as a blocking CI step. Gitleaks exits with code `1` when it detects a potential secret and code `0` for a clean scan. In PR #5, GitHub Actions successfully scanned 6 commits and reported `no leaks found`.
+The workflow uses `fetch-depth: 0` to retrieve Git history and runs Gitleaks as a blocking CI step. Gitleaks exits with code `1` when it detects a potential secret and code `0` for a clean scan. In PR #5, GitHub Actions successfully scanned six commits and reported `no leaks found`.
 
 Local validation for PR #5 included a clean Git history scan and a detection test using a fictitious credential passed through standard input. No real credentials or test secrets were committed to the repository.
 
@@ -172,4 +207,4 @@ The initial architecture and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-Bandit and pip-audit provide Python security checks, while PR #5 extends the pipeline with Gitleaks secret scanning. Additional controls, including Semgrep, container scanning, and SBOM generation, are planned for later project stages.
+Bandit and pip-audit provide Python security checks, Gitleaks scans Git history for potential secrets, and PR #6 introduces Semgrep with version-controlled security rules. Docker packaging, container scanning, SBOM generation, and registry publishing remain planned for later project stages.
