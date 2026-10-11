@@ -1,0 +1,15 @@
+
+rules:
+  - id: python-avoid-eval
+    languages:
+      - python
+    severity: ERROR
+    message: "Avoid eval(): dynamic code execution can introduce security vulnerabilities."
+    pattern: eval(...)
+
+  - id: fastapi-no-debug
+    languages:
+      - python
+    severity: ERROR
+    message: "Do not enable FastAPI debug mode in production."
+    pattern: FastAPI(..., debug=True, ...)
