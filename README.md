@@ -10,7 +10,7 @@ The application currently exposes a health-check endpoint and includes automated
 
 GitHub Actions runs automated tests, Ruff, Bandit, pip-audit, and Gitleaks on pull requests targeting `main` and on pushes to `main`.
 
-PR #6 adds Semgrep security scanning with two version-controlled rules. Both rules and the application scan have passed local validation. The Semgrep GitHub Actions integration has not yet been validated and must be checked before merging PR #6.
+PR #6 adds Semgrep security scanning with two version-controlled rules. Local validation and GitHub Actions execution have both succeeded: the CI run validated two rules and scanned two Python files with zero findings. PR #6 is awaiting its final security self-review and merge.
 
 **Not yet implemented:** Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
 
@@ -22,7 +22,7 @@ PR #6 adds Semgrep security scanning with two version-controlled rules. Both rul
 - Ruff
 - Bandit and pip-audit
 - Gitleaks
-- Semgrep Community Edition (integration in progress in PR #6)
+- Semgrep Community Edition
 - pip-tools
 - GitHub Actions
 
@@ -159,9 +159,11 @@ $semgrepExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\semgrep-1.180.0\Script
 & $semgrepExe scan --metrics=off --config .semgrep/python-security.yml --error src
 ```
 
-Local validation of PR #6 confirmed that both rules are valid and the application scan found no violations in two tracked Python files. A separate test with an intentionally insecure temporary file triggered both rules and returned exit code `1`. No insecure test code was committed to Git.
+Local validation confirmed that both rules were valid and the application scan found no violations in two Git-tracked Python files. A separate test with an intentionally insecure temporary file triggered both rules and returned exit code `1`. No insecure test code was committed to Git.
 
-The GitHub Actions workflow is configured to install Semgrep `1.180.0` in a separate virtual environment, validate the rules, and scan `src/` with `--error` so findings cause the job to fail. The workflow disables Semgrep metrics with `--metrics=off`. **This new CI integration still needs to be verified in PR #6 before merging.**
+The GitHub Actions workflow installs Semgrep `1.180.0` in a separate virtual environment, validates the rules, and scans `src/` with `--error` to make findings blocking. Metrics are disabled with `--metrics=off`.
+
+The PR #6 GitHub Actions run successfully validated both rules and scanned two Git-tracked Python files with zero findings. The scan is limited to files selected by Semgrep and does not guarantee coverage of ignored or untracked files.
 
 The initial rule set is intentionally narrow and is not a comprehensive security audit. Passing the scan does not guarantee the absence of vulnerabilities. Semgrep's version is pinned, but its transitive installation dependencies are not locked with hashes.
 
