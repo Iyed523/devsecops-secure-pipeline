@@ -8,9 +8,11 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 The application currently exposes a health-check endpoint and includes automated tests, Python linting and formatting checks, and locked dependencies with SHA-256 hashes.
 
-GitHub Actions runs the existing quality checks on pull requests targeting `main` and on pushes to `main`. This project stage adds Bandit and pip-audit security checks to the same workflow; their CI execution must be validated before merging this change.
+GitHub Actions runs automated tests, code-quality checks, Bandit, and pip-audit on pull requests targeting `main` and on pushes to `main`.
 
-**Not yet implemented:** Semgrep, secret scanning, Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
+PR #5 adds Gitleaks secret scanning to the existing workflow. Its installation and Git history scan were successfully validated in GitHub Actions.
+
+**Not yet implemented:** Semgrep, Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
 
 ## Technology stack
 
@@ -19,6 +21,7 @@ GitHub Actions runs the existing quality checks on pull requests targeting `main
 - Pytest and HTTPX2
 - Ruff
 - Bandit and pip-audit
+- Gitleaks
 - pip-tools
 - GitHub Actions
 
@@ -53,7 +56,7 @@ python -m pip install --require-hashes -r requirements-dev.txt
 python -m pip check
 ```
 
-The development requirements include the application dependencies as well as testing, code-quality, and security-analysis tools.
+The development requirements include application dependencies as well as testing, code-quality, and Python security-analysis tools. Gitleaks is a separate executable and is not installed by pip.
 
 ### 4. Run the API
 
@@ -105,6 +108,8 @@ python -m ruff format --check .
 
 ## Security checks
 
+### Python source and dependency scanning
+
 Scan the application source code with Bandit:
 
 ```powershell
@@ -123,9 +128,30 @@ Audit development dependencies:
 python -m pip_audit -r requirements-dev.txt
 ```
 
-The GitHub Actions workflow is configured to execute these scans on pull requests targeting `main` and on pushes to `main`. Their first CI run will be verified in the security-scanning pull request.
+Bandit and pip-audit were validated locally and in GitHub Actions in PR #4. Their checks run on pull requests targeting `main` and on pushes to `main`.
 
-Bandit checks for potentially insecure Python patterns, while pip-audit checks for known dependency vulnerabilities. Neither tool guarantees the absence of security issues. Dependency auditing requires access to vulnerability data sources.
+Bandit detects potentially insecure Python patterns, while pip-audit checks for known dependency vulnerabilities. Neither guarantees the absence of security issues. Dependency auditing requires access to vulnerability data sources.
+
+### Git history secret scanning
+
+Gitleaks scans Git history for potential secrets, including API keys and access tokens.
+
+PR #5 uses Gitleaks version `8.30.0`. The GitHub Actions workflow downloads the Linux x64 archive and verifies its pinned SHA-256 checksum before executing the scanner. The PR #5 CI logs confirmed successful checksum verification and version `8.30.0`.
+
+On Windows, after separately installing and verifying Gitleaks `8.30.0` at the path below, run:
+
+```powershell
+$gitleaks = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\gitleaks-8.30.0\gitleaks.exe"
+& $gitleaks git --redact=100 --log-opts="--all" --no-banner .
+```
+
+The command scans commits reachable through locally available Git references. It does not scan uncommitted working-tree changes. The `--redact=100` option masks detected secret values in the output.
+
+The workflow uses `fetch-depth: 0` to retrieve Git history and runs Gitleaks as a blocking CI step. Gitleaks exits with code `1` when it detects a potential secret and code `0` for a clean scan. In PR #5, GitHub Actions successfully scanned 6 commits and reported `no leaks found`.
+
+Local validation for PR #5 included a clean Git history scan and a detection test using a fictitious credential passed through standard input. No real credentials or test secrets were committed to the repository.
+
+Gitleaks may produce false positives and cannot detect every exposed secret. Findings require investigation. If a real credential is exposed, revoke or rotate it; removing it from the current files alone is insufficient.
 
 ## Dependency management
 
@@ -146,4 +172,4 @@ The initial architecture and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-Bandit and pip-audit provide the initial Python security checks. Additional controls, including Semgrep, secret scanning, container scanning, and SBOM generation, are planned for later project stages.
+Bandit and pip-audit provide Python security checks, while PR #5 extends the pipeline with Gitleaks secret scanning. Additional controls, including Semgrep, container scanning, and SBOM generation, are planned for later project stages.
