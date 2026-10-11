@@ -6,9 +6,11 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 ## Current status
 
-The application currently exposes a health-check endpoint and includes an automated test suite, Python linting, formatting checks, and locked dependencies with SHA-256 hashes.
+The application currently exposes a health-check endpoint and includes automated tests, Python linting and formatting checks, and locked dependencies with SHA-256 hashes.
 
-**Not yet implemented:** GitHub Actions CI/CD, security scanners, Docker packaging, container registry publishing, and the release evaluation endpoint.
+GitHub Actions runs the existing quality checks on pull requests targeting `main` and on pushes to `main`. This project stage adds Bandit and pip-audit security checks to the same workflow; their CI execution must be validated before merging this change.
+
+**Not yet implemented:** Semgrep, secret scanning, Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
 
 ## Technology stack
 
@@ -16,7 +18,9 @@ The application currently exposes a health-check endpoint and includes an automa
 - FastAPI and Uvicorn
 - Pytest and HTTPX2
 - Ruff
+- Bandit and pip-audit
 - pip-tools
+- GitHub Actions
 
 ## Getting started
 
@@ -49,7 +53,7 @@ python -m pip install --require-hashes -r requirements-dev.txt
 python -m pip check
 ```
 
-The development requirements include the application dependencies as well as the testing and code-quality tools.
+The development requirements include the application dependencies as well as testing, code-quality, and security-analysis tools.
 
 ### 4. Run the API
 
@@ -99,7 +103,29 @@ Check formatting:
 python -m ruff format --check .
 ```
 
-These commands will be candidates for automated checks in a future GitHub Actions workflow.
+## Security checks
+
+Scan the application source code with Bandit:
+
+```powershell
+python -m bandit -r src
+```
+
+Audit application dependencies:
+
+```powershell
+python -m pip_audit -r requirements.txt
+```
+
+Audit development dependencies:
+
+```powershell
+python -m pip_audit -r requirements-dev.txt
+```
+
+The GitHub Actions workflow is configured to execute these scans on pull requests targeting `main` and on pushes to `main`. Their first CI run will be verified in the security-scanning pull request.
+
+Bandit checks for potentially insecure Python patterns, while pip-audit checks for known dependency vulnerabilities. Neither tool guarantees the absence of security issues. Dependency auditing requires access to vulnerability data sources.
 
 ## Dependency management
 
@@ -111,7 +137,7 @@ The project uses three complementary files:
 
 The requirements files are generated with pip-tools and include SHA-256 hashes.
 
-Hashes verify downloaded distributions against the recorded fingerprints; they do not establish that dependencies are vulnerability-free.
+Hashes verify downloaded distributions against recorded fingerprints; they do not establish that dependencies are vulnerability-free.
 
 ## Architecture and security
 
@@ -120,6 +146,4 @@ The initial architecture and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-Security controls such as dependency auditing, static security analysis, secret scanning, container scanning, and SBOM generation are planned for later project stages.
-
-\ No newline at end of file
+Bandit and pip-audit provide the initial Python security checks. Additional controls, including Semgrep, secret scanning, container scanning, and SBOM generation, are planned for later project stages.

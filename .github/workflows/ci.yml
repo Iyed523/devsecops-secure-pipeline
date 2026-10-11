@@ -40,3 +40,12 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Bandit security scan
+        run: python -m bandit -r src
+
+      - name: Audit application dependencies
+        run: python -m pip_audit -r requirements.txt
+
+      - name: Audit development dependencies
+        run: python -m pip_audit -r requirements-dev.txt
