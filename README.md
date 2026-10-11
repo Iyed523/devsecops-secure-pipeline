@@ -10,7 +10,7 @@ The application currently exposes a health-check endpoint and includes automated
 
 GitHub Actions runs automated tests, code-quality checks, Bandit, and pip-audit on pull requests targeting `main` and on pushes to `main`.
 
-PR #5 adds Gitleaks secret scanning to the existing workflow. The Gitleaks integration has been tested locally; its execution in GitHub Actions still needs to be validated before merging the PR.
+PR #5 adds Gitleaks secret scanning to the existing workflow. Its installation and Git history scan were successfully validated in GitHub Actions.
 
 **Not yet implemented:** Semgrep, Docker packaging, container scanning, SBOM generation, container registry publishing, and the release evaluation endpoint.
 
@@ -21,7 +21,7 @@ PR #5 adds Gitleaks secret scanning to the existing workflow. The Gitleaks integ
 - Pytest and HTTPX2
 - Ruff
 - Bandit and pip-audit
-- Gitleaks (integration in progress in PR #5)
+- Gitleaks
 - pip-tools
 - GitHub Actions
 
@@ -136,7 +136,7 @@ Bandit detects potentially insecure Python patterns, while pip-audit checks for 
 
 Gitleaks scans Git history for potential secrets, including API keys and access tokens.
 
-PR #5 uses Gitleaks version `8.30.0`. The GitHub Actions workflow configuration downloads the Linux x64 archive and verifies its pinned SHA-256 checksum before executing the scanner. This CI integration has not yet been validated on GitHub Actions.
+PR #5 uses Gitleaks version `8.30.0`. The GitHub Actions workflow downloads the Linux x64 archive and verifies its pinned SHA-256 checksum before executing the scanner. The PR #5 CI logs confirmed successful checksum verification and version `8.30.0`.
 
 On Windows, after separately installing and verifying Gitleaks `8.30.0` at the path below, run:
 
@@ -147,7 +147,7 @@ $gitleaks = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\gitleaks-8.30.0\gitleaks
 
 The command scans commits reachable through locally available Git references. It does not scan uncommitted working-tree changes. The `--redact=100` option masks detected secret values in the output.
 
-The workflow is configured with `fetch-depth: 0` to retrieve Git history and to run Gitleaks as a blocking CI step. A detected secret causes the scan to exit with code `1`; a clean scan exits with code `0`. The CI behavior will be verified in PR #5 before merging.
+The workflow uses `fetch-depth: 0` to retrieve Git history and runs Gitleaks as a blocking CI step. Gitleaks exits with code `1` when it detects a potential secret and code `0` for a clean scan. In PR #5, GitHub Actions successfully scanned 6 commits and reported `no leaks found`.
 
 Local validation for PR #5 included a clean Git history scan and a detection test using a fictitious credential passed through standard input. No real credentials or test secrets were committed to the repository.
 
@@ -172,4 +172,4 @@ The initial architecture and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-Bandit and pip-audit provide the initial Python security checks. Gitleaks secret scanning is being integrated in PR #5. Additional controls, including Semgrep, container scanning, and SBOM generation, are planned for later project stages.
+Bandit and pip-audit provide Python security checks, while PR #5 extends the pipeline with Gitleaks secret scanning. Additional controls, including Semgrep, container scanning, and SBOM generation, are planned for later project stages.
