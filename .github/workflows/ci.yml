@@ -85,3 +85,46 @@ jobs:
       - name: Semgrep security scan
         run: |
           "$RUNNER_TEMP/semgrep-venv/bin/semgrep" scan --metrics=off --config .semgrep/python-security.yml --error src
+
+  container:
+    name: Docker build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Docker image
+        run: docker build --platform linux/amd64 --progress=plain --tag devsecops-secure-pipeline:ci .
+      - name: Smoke test Docker container
+        run: |
+          docker run --detach \
+            --name devsecops-ci-smoke \
+            --publish 127.0.0.1:18000:8000 \
+            --read-only \
+            --cap-drop=ALL \
+            --security-opt=no-new-privileges \
+            devsecops-secure-pipeline:ci
+
+          trap 'docker rm --force devsecops-ci-smoke >/dev/null 2>&1 || true' EXIT
+
+          for attempt in {1..20}; do
+            if response="$(curl --fail --silent http://127.0.0.1:18000/health)"; then
+              if [ "$response" = '{"status":"ok"}' ]; then
+                echo "Docker smoke test passed: $response"
+                exit 0
+              fi
+
+              echo "Unexpected health response: $response" >&2
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          echo "Docker smoke test failed: /health is unavailable" >&2
+          docker logs devsecops-ci-smoke || true
+          exit 1
