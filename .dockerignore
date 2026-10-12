@@ -3,3 +3,7 @@
 !requirements.txt
 !src/
 !src/**
+
+# Exclude generated Python package metadata
+src/**/*.egg-info
+src/**/*.egg-info/**
