@@ -10,7 +10,9 @@ COPY requirements.txt ./requirements.txt
 RUN python -m pip install \
     --no-cache-dir \
     --require-hashes \
-    -r requirements.txt
+    -r requirements.txt \
+    && python -m pip uninstall --yes pip
+
 
 COPY src/ ./src/
 

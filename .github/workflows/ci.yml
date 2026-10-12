@@ -128,3 +128,39 @@ jobs:
           echo "Docker smoke test failed: /health is unavailable" >&2
           docker logs devsecops-ci-smoke || true
           exit 1
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.75.0"
+          TRIVY_SHA256: "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+
+          printf '%s  %s\n' "$TRIVY_SHA256" "$archive" | sha256sum --check -
+
+          tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
+          chmod +x "$RUNNER_TEMP/trivy"
+
+          "$RUNNER_TEMP/trivy" --version
+
+      - name: Trivy HIGH and CRITICAL report
+        run: |
+          "$RUNNER_TEMP/trivy" image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --format table \
+            --exit-code 0 \
+            devsecops-secure-pipeline:ci
+
+      - name: Trivy fixable vulnerability gate
+        run: |
+          "$RUNNER_TEMP/trivy" image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --format table \
+            devsecops-secure-pipeline:ci
