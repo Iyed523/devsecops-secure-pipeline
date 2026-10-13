@@ -271,7 +271,55 @@ jobs:
 
           docker load --input image.tar
           docker image inspect devsecops-secure-pipeline:ci > /dev/null
+      - name: Require existing private GHCR package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
+          response="$RUNNER_TEMP/ghcr-packages.json"
+
+          curl --fail --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --get \
+            --data-urlencode "package_type=container" \
+            --data-urlencode "visibility=private" \
+            --data-urlencode "per_page=100" \
+            --output "$response" \
+            "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "ghcr-packages.json"
+          packages = json.loads(path.read_text(encoding="utf-8"))
+
+          if not isinstance(packages, list):
+              raise SystemExit("Unexpected GitHub Packages API response")
+
+          matches = [
+              package
+              for package in packages
+              if isinstance(package, dict)
+              and package.get("name") == "devsecops-secure-pipeline"
+              and package.get("package_type") == "container"
+              and package.get("visibility") == "private"
+              and package.get("owner", {}).get("login", "").lower()
+                  == os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          ]
+
+          if len(matches) != 1:
+              raise SystemExit(
+                  "GHCR publication blocked: existing private package "
+                  "not found or not accessible"
+              )
+
+          print("GHCR preflight passed: existing private package verified")
+          PY
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

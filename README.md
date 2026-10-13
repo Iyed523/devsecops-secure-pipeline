@@ -6,15 +6,17 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 ## Current status
 
-**PRs #1 through #9 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, secure Docker containerization, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. Both GitHub Actions jobs passed after PR #9 was merged (`cbf42f3`, workflow run #16).
+**PRs #1 through #10 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, secure Docker containerization, Trivy vulnerability scanning, Syft-generated CycloneDX SBOM artifacts, and GHCR publishing support. PR #10 was merged as commit `e1ef45f`.
 
-**PR #10 — Secure Container Image Publishing to GHCR is in progress** on `feature/secure-ghcr-publishing`. The proposal adds an OCI source label, exports the already-scanned Docker image after successful CI checks on trusted `main` pushes, and introduces a separate publication job with narrowly scoped package-write access. **No GHCR publication from PR #10 has yet been validated.**
+**PR #11 — Private GHCR Publishing Safeguard is in progress** on `fix/ghcr-private-publishing`. The initial GHCR publication after PR #10 created a **public** package, contrary to the project's **private-only** requirement. The public package was subsequently deleted and the GitHub Actions `CI` workflow was manually disabled to prevent another unintended publication. **No replacement private GHCR package has been created or verified.** Deleting the package cannot undo any downloads that may have occurred while it was public.
+
+The PR #11 branch introduces a fail-closed pre-publication API check for an **existing private** GHCR package. This check is not yet merged and has not been executed with `GITHUB_TOKEN` against a private package. **The CI workflow remains disabled** during corrective work.
 
 **SBOM validation:** Syft `1.54.1` successfully generated a CycloneDX 1.7 report from the local PR #8 image (518 components). The PR #9 GitHub Actions artifact was downloaded and independently parsed (3,342 components). Most of the difference involves file entries (400 locally versus 3,229 in CI); the precise cause has not been established.
 
 The latest local Trivy report identified **57 Debian HIGH/CRITICAL findings (55 HIGH and 2 CRITICAL)**, with no fixed versions recorded in that report. They remain under review. Passing the fixable-vulnerability gate does not mean that the image is vulnerability-free.
 
-**Not yet implemented on `main`:** image publication to GitHub Container Registry (PR #10 in progress) and the release evaluation endpoint.
+**Not yet validated:** private GHCR bootstrap, the PR #11 preflight using `GITHUB_TOKEN`, end-to-end private publication after remediation, and the release evaluation endpoint.
 
 ## Technology stack
 
@@ -154,7 +156,7 @@ Expected health response: `{"status":"ok"}`. Expected identity: `uid=10001 gid=1
 - Hashes verify downloaded Python distributions against recorded fingerprints; they do not guarantee the absence of vulnerabilities.
 - Dependency installation happens with build-time root privileges; the application runs as UID/GID `10001:10001`.
 - `--read-only`, `--cap-drop=ALL`, and `no-new-privileges` are runtime options applied by the documented commands and CI smoke test, not automatically enforced by the Dockerfile.
-- The current build targets `linux/amd64`. As of PR #9 on `main`, no image is published to a container registry; PR #10 proposes conditional GHCR publication.
+- The current build targets `linux/amd64`. PR #10 added GHCR publication, but the first package was publicly visible and was deleted. Automatic publishing is temporarily disabled until the private-only safeguards are validated.
 
 ## Docker image vulnerability scanning (PR #8 merged)
 
@@ -344,42 +346,42 @@ Most of the difference in total components comes from entries classified as `fil
 - The report may reveal package and version information; review access permissions before sharing artifacts.
 - Integrity checks validate downloaded archive bytes against a pinned checksum, but do not replace independent verification of publisher identity or release provenance.
 
-## Secure container image publishing to GHCR (PR #10 in progress)
+## Secure container image publishing to GHCR (PR #10 merged; PR #11 hardening in progress)
 
-PR #10 proposes publishing the checked Docker image to **GitHub Container Registry (GHCR)** under:
+PR #10 introduced image publishing support for **GitHub Container Registry (GHCR)** under:
 
 ```text
 ghcr.io/iyed523/devsecops-secure-pipeline
 ```
 
-The Dockerfile adds `org.opencontainers.image.source="https://github.com/Iyed523/devsecops-secure-pipeline"` to identify the source repository. The pinned base image, hash-locked dependencies, and non-root runtime remain unchanged. The local PR #10 Docker build succeeded, and inspection confirmed the OCI source label.
+**Required visibility: Private.** The first publication from `main` created a package observed as **Public** on GitHub. It did not meet this requirement. The package was removed, and the `CI` workflow was manually disabled while a corrective control is developed. The precise reason that package visibility became public has not been independently established; **do not rely on a presumed default visibility**.
+
+The Dockerfile includes `org.opencontainers.image.source="https://github.com/Iyed523/devsecops-secure-pipeline"` to identify its source repository. The pinned base image, hash-locked dependencies, and non-root runtime remain unchanged. Local PR #10 validation confirmed the image builds and includes this OCI label.
 
 ### Publication policy
 
-| Event | `quality` / `container` checks | Image publication |
+| Event | `quality` / `container` checks | Publishing behavior |
 | --- | --- | --- |
-| Pull request targeting `main` | Run | **No** — `publish` is skipped |
-| Push to `main`, any required job fails | Run | **No** — `publish` depends on both jobs |
-| Push to `main`, both required jobs succeed | Run | Authorized to publish to GHCR |
-| Push to another branch | Workflow does not run | No |
+| Pull request targeting `main` | Run when CI is enabled | **No publishing** — `publish` is skipped |
+| Push to another branch | Workflow does not run | No publishing |
+| Push to `main`, prerequisite check fails | Run when CI is enabled | **No publishing** — `publish` depends on both jobs |
+| Push to `main`, all prerequisites pass | Run when CI is enabled | Allowed only if the PR #11 private-package preflight also succeeds |
 
-The publish job additionally checks that `github.repository` equals `Iyed523/devsecops-secure-pipeline`; this helps prevent publishing in an unintended repository context.
+The `publish` job additionally checks that `github.repository` equals `Iyed523/devsecops-secure-pipeline`. **Until the corrective PR is merged, the `main` branch still contains the original publishing logic without the private-package preflight; keep CI disabled.**
 
 ### Export, transfer, and verification
 
-For a trusted push to `main`, the existing `container` job completes its build, smoke test, Trivy scans, and Syft inventory before executing the export steps:
+For a trusted push to `main`, the `container` job is designed to complete its Docker build, restricted smoke test, Trivy scans, and Syft inventory before the export steps:
 
-1. Save the **same locally built and scanned image** (`devsecops-secure-pipeline:ci`) using `docker save` to `image.tar`.
-2. Create `image.tar.sha256` and verify it using `sha256sum --check`.
-3. Upload both files as the `scanned-container-image` GitHub Actions artifact with **one-day retention** and `compression-level: 0`.
+1. Save the **same built and scanned image** (`devsecops-secure-pipeline:ci`) using `docker save` to `image.tar`.
+2. Generate `image.tar.sha256` and verify the archive using `sha256sum --check`.
+3. Upload both files as the `scanned-container-image` GitHub Actions artifact, with **one-day retention** and `compression-level: 0`.
 
-The new `publish` job requires both `quality` and `container` to succeed. It downloads the archive, checks the recorded SHA-256, and loads the image with `docker load`. It **does not rebuild the Docker image**, avoiding a mismatch between the scanned build and the published build.
+The `publish` job depends on `quality` and `container`, downloads the artifact, checks the recorded SHA-256, and loads the image with `docker load`. It **does not rebuild the Docker image**. The accompanying checksum and archive travel together, so this check is not an independent provenance attestation or a digital signature.
 
-The accompanying SHA-256 detects accidental alteration relative to the downloaded checksum file. Because the checksum and archive travel in the same artifact, this is **not** independent cryptographic evidence of image provenance. Artifact access, job isolation, and workflow trust boundaries remain important.
+### GHCR authentication, tags, and permissions
 
-### GHCR authentication, tag, and permissions
-
-The workflow's default permission stays `contents: read`. Only the `publish` job requests:
+The workflow's default permission is `contents: read`. Only the `publish` job requests:
 
 ```yaml
 permissions:
@@ -387,25 +389,46 @@ permissions:
   packages: write
 ```
 
-Authentication uses the workflow's `GITHUB_TOKEN` with `docker login ghcr.io --password-stdin`; no personal access token is required. The published image receives a tag containing the entire commit SHA:
+The publishing job authenticates to GHCR with `GITHUB_TOKEN` using `docker login ghcr.io --password-stdin`. No personal access token is stored in the workflow. Published images use a tag tied to the full source commit SHA:
 
 ```text
 ghcr.io/iyed523/devsecops-secure-pipeline:sha-<full-40-character-git-sha>
 ```
 
-This makes the image easy to trace to a source revision. Tags remain mutable; the registry digest (`@sha256:...`) is the more precise content identity. Registry image signing and attestations are outside the scope of PR #10.
+A tag is mutable; use the GHCR manifest digest (`@sha256:...`) to identify the exact published content. Image signing and provenance attestations are not implemented.
 
-### First-publication checks and limitations
+### Private GHCR publishing safeguard (PR #11 in progress)
 
-**Not yet validated:** the GHCR push itself will only be exercised after PR #10 is merged and the trusted `main` workflow runs. During PR review, the publish and scanned-image upload steps should be skipped, while existing CI checks must pass.
+The PR #11 feature branch adds a blocking **`Require existing private GHCR package`** step immediately before Docker login and pushing.
 
-After the first `main` publication, verify that the registry package exists, inspect its visibility and access controls, record the published digest, and confirm that the expected SHA-tagged image can be retrieved by an authorized user. A private package is desired initially, but its **actual visibility must be checked in GitHub Packages settings**; do not infer it solely from the repository visibility or Docker label.
+The step queries the GitHub Packages REST API for container packages with `visibility=private` under the expected account and checks for the exact name `devsecops-secure-pipeline`, the expected owner, and reported private visibility. It exits unsuccessfully if the API request fails, the response is unexpected, or an accessible matching private package is not found.
 
-- The image and transfer archive are not signed or independently attested.
-- A successful CI gate does not eliminate the existing Debian vulnerability findings.
-- A one-day transfer artifact is temporary and should not be treated as a durable image archive.
-- Package permissions, organization policies, registry availability, and artifact size limits can still cause the initial publish job to fail.
-- No `latest` tag or push to a container registry is performed from untrusted pull requests.
+This check is intended to **fail closed**. It does **not** create a package, change visibility, grant package permissions, or guarantee that visibility cannot change after the check. The API endpoint's accessibility with the job's `GITHUB_TOKEN` **has not yet been validated** against the intended private package; insufficient access may block publishing even if a private package exists. Account/package pagination may also require follow-up if the package cannot be located.
+
+A passing preflight must be supplemented by direct verification of the package's **Private** visibility and its repository/Actions access settings after publication.
+
+### Controlled recovery and first private publication
+
+**Do not re-enable GitHub Actions CI or re-create the package from the current unguarded `main` workflow.** The recovery plan is:
+
+1. Review and merge the PR #11 safeguard while the workflow remains disabled. Validate the YAML and code by an independent review or local checks; automatic CI will not run while disabled.
+2. Establish a **new private package** through a separately controlled bootstrap publication, using only authorized credentials and the minimum required permissions. Never commit, log, or share credentials. Before proceeding, verify the resulting package is explicitly marked **Private** in GitHub Packages.
+3. Review package access settings and explicitly authorize the source repository's GitHub Actions workflow to write to the private package. Do not assume the OCI source label alone grants the intended access.
+4. Test the preflight's actual behavior with `GITHUB_TOKEN` in a controlled workflow environment. Confirm a missing/non-private/inaccessible package fails closed and an authorized private package is recognized.
+5. Only after these prerequisites, re-enable CI, verify that the full `quality`, `container`, and `publish` jobs succeed, and confirm the new image tag, registry digest, package visibility, and effective access permissions.
+
+No replacement package has yet been created. These steps are **planned**, not completed.
+
+### Security limitations and incident follow-up
+
+- Removing the public package prevents its continued availability on GHCR but cannot revoke any images already downloaded while it was public.
+- No automatic publishing should run while the original workflow is disabled and the corrective guard has not been merged and validated.
+- The GitHub Packages API check is a preflight guard, **not** a continuous visibility-enforcement mechanism or a guarantee of confidentiality.
+- The image and transfer artifact are not cryptographically signed or independently attested.
+- The existing Debian HIGH/CRITICAL vulnerability findings remain under review; successful Trivy/Syft checks do not eliminate them.
+- The one-day transfer artifact is temporary, not a durable registry backup.
+- GHCR access policies, permissions, API availability, and artifact limits may affect publishing.
+- Pull requests must never push images to GHCR; no `latest` tag is produced by this workflow.
 
 ## Tests and code quality
 
@@ -484,15 +507,15 @@ PR #5 validated clean-history scanning and detection of a fictitious credential 
 
 ## GitHub Actions CI
 
-The workflow is defined in `.github/workflows/ci.yml` and runs for pull requests targeting `main` and pushes to `main`. The default workflow permission is `contents: read`.
+The workflow is defined in `.github/workflows/ci.yml` and is configured for pull requests targeting `main` and pushes to `main`, with `contents: read` as the default permission. **The workflow has been manually disabled following the public GHCR publication incident. It is not currently running automatically.**
 
 The independent **`quality`** job performs hash-locked dependency installation, dependency consistency checks, Ruff linting and formatting, Pytest, Bandit, pip-audit, Gitleaks history scanning, and Semgrep rule validation and source scanning.
 
 The **`container`** job builds the `linux/amd64` image `devsecops-secure-pipeline:ci`, performs a restricted container smoke test, scans with Trivy, and generates, validates, and uploads a CycloneDX SBOM using Syft. **Both jobs passed on `main` after PR #9 merged** (workflow run #16).
 
-PR #10 adds image transfer steps to `container` for trusted `main` pushes and introduces a third **`publish`** job, which needs both existing jobs to pass. The `publish` job runs only on a push to `main` in the intended repository, checks and loads the previously scanned image archive, authenticates to GHCR using `GITHUB_TOKEN`, and pushes a tag tied to the full Git commit SHA. Only this job receives `packages: write`.
+PR #10, merged as `e1ef45f`, added Docker image transfer steps to `container` and a third **`publish`** job dependent on both prerequisite jobs. The PR validation succeeded with publishing skipped. After merging, the first GHCR publication created a publicly visible package, which was subsequently deleted. GHCR private-only publication therefore remains **unresolved**.
 
-**PR #10 status:** the workflow changes are local to the feature branch and have not yet been validated by GitHub Actions. The `publish` job should be skipped during PR validation; the first real GHCR push will occur only after merging to `main` and passing its required checks.
+**PR #11 status:** on `fix/ghcr-private-publishing`, a blocking check for an existing private GHCR package has been added before Docker authentication and pushing. It has **not** yet been merged or validated with the `GITHUB_TOKEN` in a live workflow. Keep CI disabled until the corrected configuration and the private-package bootstrap/access plan have been reviewed and approved.
 
 ## Dependency management
 
@@ -511,6 +534,6 @@ The initial design and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-The security pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. PR #10 proposes controlled image publication to GHCR, after both existing CI jobs succeed.
+The pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. PR #10 introduced GHCR publishing but its first package was public and was removed; PR #11 is hardening the publishing process to enforce the project's **private-only** requirement before resuming automatic publication.
 
-Outstanding security work includes ongoing review of the 57 locally observed Debian HIGH/CRITICAL findings, deliberate base-image and dependency updates, investigation of local/CI SBOM inventory differences, and validation of package visibility and registry digest after the first GHCR publication. The release evaluation endpoint remains a future milestone.
+Outstanding security work includes reviewing the 57 locally observed Debian HIGH/CRITICAL findings, deliberately updating the base image and dependencies, investigating local/CI SBOM inventory differences, validating the private GHCR bootstrap and `GITHUB_TOKEN` preflight, and independently verifying registry visibility, access permissions, and image digest after recovery. The release evaluation endpoint remains a future milestone.
