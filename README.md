@@ -6,15 +6,15 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 ## Current status
 
-**PRs #1 through #8 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, secure Docker containerization, and Trivy image vulnerability scanning. Both GitHub Actions jobs passed on `main` following PR #8 (commit `285936b`).
+**PRs #1 through #9 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, secure Docker containerization, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. Both GitHub Actions jobs passed after PR #9 was merged (`cbf42f3`, workflow run #16).
 
-**PR #9 — Software Bill of Materials (SBOM) Generation with Syft is in progress** on `feature/sbom-generation`. It adds Syft `1.54.1` to the existing Docker CI job, generates a CycloneDX JSON SBOM, checks its basic structure and expected application components, and uploads it as a GitHub Actions artifact retained for seven days.
+**PR #10 — Secure Container Image Publishing to GHCR is in progress** on `feature/secure-ghcr-publishing`. The proposal adds an OCI source label, exports the already-scanned Docker image after successful CI checks on trusted `main` pushes, and introduces a separate publication job with narrowly scoped package-write access. **No GHCR publication from PR #10 has yet been validated.**
 
-Local validation of Syft `1.54.1` has succeeded on the PR #8 image: **117 cataloged packages** and **518 CycloneDX components** (112 libraries, 5 applications, 400 files, and 1 operating system). **The new PR #9 CI steps have not yet been validated on GitHub Actions.**
+**SBOM validation:** Syft `1.54.1` successfully generated a CycloneDX 1.7 report from the local PR #8 image (518 components). The PR #9 GitHub Actions artifact was downloaded and independently parsed (3,342 components). Most of the difference involves file entries (400 locally versus 3,229 in CI); the precise cause has not been established.
 
-The latest local Trivy scan reported **57 Debian HIGH/CRITICAL findings (55 HIGH and 2 CRITICAL)**. None had a fixed version recorded in that report. These findings remain under review; passing the fixable-vulnerability gate does not mean that the image is vulnerability-free.
+The latest local Trivy report identified **57 Debian HIGH/CRITICAL findings (55 HIGH and 2 CRITICAL)**, with no fixed versions recorded in that report. They remain under review. Passing the fixable-vulnerability gate does not mean that the image is vulnerability-free.
 
-**Not yet implemented on `main`:** standalone SBOM artifact generation (PR #9 in progress), container registry publishing, and the release evaluation endpoint.
+**Not yet implemented on `main`:** image publication to GitHub Container Registry (PR #10 in progress) and the release evaluation endpoint.
 
 ## Technology stack
 
@@ -25,7 +25,7 @@ The latest local Trivy scan reported **57 Debian HIGH/CRITICAL findings (55 HIGH
 - Gitleaks
 - Semgrep Community Edition
 - Trivy Community Edition
-- Syft (SBOM generation in PR #9)
+- Syft (CycloneDX SBOM generation and CI artifacts)
 - pip-tools, Docker, and GitHub Actions
 
 ## Getting started
@@ -154,7 +154,7 @@ Expected health response: `{"status":"ok"}`. Expected identity: `uid=10001 gid=1
 - Hashes verify downloaded Python distributions against recorded fingerprints; they do not guarantee the absence of vulnerabilities.
 - Dependency installation happens with build-time root privileges; the application runs as UID/GID `10001:10001`.
 - `--read-only`, `--cap-drop=ALL`, and `no-new-privileges` are runtime options applied by the documented commands and CI smoke test, not automatically enforced by the Dockerfile.
-- The current build targets `linux/amd64` and is not published to a container registry.
+- The current build targets `linux/amd64`. As of PR #9 on `main`, no image is published to a container registry; PR #10 proposes conditional GHCR publication.
 
 ## Docker image vulnerability scanning (PR #8 merged)
 
@@ -218,7 +218,7 @@ The updated image returned the expected `/health` response as UID/GID `10001:100
 - Vulnerability databases, vendor severity ratings, and fix availability change over time.
 - A scanner finding does not by itself establish exploitability; a passing scan does not prove the absence of vulnerabilities.
 
-## Software Bill of Materials (SBOM) generation (PR #9 in progress)
+## Software Bill of Materials (SBOM) generation (PR #9 merged)
 
 A **Software Bill of Materials (SBOM)** inventories software and related components present in the container image. PR #9 uses **Syft `1.54.1`** to generate a **CycloneDX JSON** report from the built Docker image. A SBOM improves traceability; it is not a vulnerability remediation or proof of security.
 
@@ -228,7 +228,7 @@ The Windows AMD64 Syft archive was downloaded from the official release and veri
 8b56e8285e295e0bbed26eeea9b16ed51c493be97ccdf42dae6326c84fe8e19f
 ```
 
-The planned CI installation uses the official `syft_1.54.1_linux_amd64.tar.gz` archive, version-pinned and verified before execution against SHA-256:
+The CI installation uses the official `syft_1.54.1_linux_amd64.tar.gz` archive, version-pinned and verified before execution against SHA-256:
 
 ```text
 c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
@@ -301,13 +301,11 @@ These measurements describe the tested `:pr8` image and are **not fixed CI asser
 
 ### GitHub Actions integration and artifact
 
-The PR #9 feature branch adds three steps after the existing Trivy checks in the `container` job:
+PR #9 integrated three steps after Trivy in the `container` job:
 
-1. **Install Syft:** download the pinned Linux AMD64 archive, verify SHA-256, and execute the verified binary.
-2. **Generate and validate CycloneDX SBOM:** scan `devsecops-secure-pipeline:ci`, parse the JSON, and require a CycloneDX format, a nonempty component list, a container target, and the `fastapi` and `uvicorn` components.
-3. **Upload CycloneDX SBOM:** publish the report as a GitHub Actions artifact using `actions/upload-artifact` pinned to a full commit SHA.
-
-Planned artifact properties:
+1. **Install Syft:** download and SHA-256-verify the pinned Linux AMD64 executable archive before execution.
+2. **Generate and validate CycloneDX SBOM:** inventory `devsecops-secure-pipeline:ci`, check JSON structure and a nonempty component list, verify container metadata, and require the `fastapi` and `uvicorn` components.
+3. **Upload CycloneDX SBOM:** publish the result as a workflow artifact using `actions/upload-artifact` pinned to a full commit SHA.
 
 | Property | Value |
 | --- | --- |
@@ -315,12 +313,28 @@ Planned artifact properties:
 | File | `devsecops-secure-pipeline.cdx.json` |
 | Format | CycloneDX JSON |
 | Retention | 7 days |
-| Trigger | Pull requests to `main` and pushes to `main`, once PR #9 is merged |
-| Repository permissions | `contents: read` |
+| Trigger | Pull requests targeting `main` and pushes to `main` |
+| Workflow permission | `contents: read` |
 
-After a successful workflow run, the artifact will be available from that run's **Artifacts** section in GitHub Actions, subject to repository permissions and retention policy. The workflow does not commit the SBOM to Git or publish the container image.
+The artifact is available in the completed run's **Artifacts** section, subject to repository access controls and expiration. The file is not committed to Git.
 
-**Status:** the Syft steps are configured on `feature/sbom-generation`; their execution, validation, and artifact upload still need to pass on GitHub Actions before PR #9 can be merged. The SBOM artifact is not yet available on `main`.
+### CI artifact validation (October 13, 2026)
+
+The PR #9 workflow successfully generated and uploaded the SBOM. The downloaded ZIP archive was extracted, and its JSON was parsed in PowerShell. The report identified the container `devsecops-secure-pipeline` and used **CycloneDX 1.7**.
+
+| CycloneDX component type | Local `:pr8` | CI `:ci` |
+| --- | ---: | ---: |
+| `library` | 112 | 111 |
+| `application` | 5 | 1 |
+| `file` | 400 | 3,229 |
+| `operating-system` | 1 | 1 |
+| **Total** | **518** | **3,342** |
+
+The CI report contains `fastapi 0.143.0`, `uvicorn 0.54.0`, `libsqlite3-0 3.40.1-2+deb12u2`, and `zlib1g 1:1.2.13.dfsg-1`.
+
+Most of the difference in total components comes from entries classified as `file`. The exact reason for the local-versus-CI discrepancy remains unconfirmed and should be investigated when improving SBOM reproducibility. Neither total is used as a fixed CI expectation.
+
+**Status:** PR #9 was merged (`cbf42f3`); both CI jobs passed on `main` after the merge, and the downloadable CycloneDX artifact was validated. SBOM generation remains enabled during PR #10.
 
 ### SBOM limitations
 
@@ -329,6 +343,69 @@ After a successful workflow run, the artifact will be available from that run's 
 - The report captures an image at scan time and should be regenerated when the image changes.
 - The report may reveal package and version information; review access permissions before sharing artifacts.
 - Integrity checks validate downloaded archive bytes against a pinned checksum, but do not replace independent verification of publisher identity or release provenance.
+
+## Secure container image publishing to GHCR (PR #10 in progress)
+
+PR #10 proposes publishing the checked Docker image to **GitHub Container Registry (GHCR)** under:
+
+```text
+ghcr.io/iyed523/devsecops-secure-pipeline
+```
+
+The Dockerfile adds `org.opencontainers.image.source="https://github.com/Iyed523/devsecops-secure-pipeline"` to identify the source repository. The pinned base image, hash-locked dependencies, and non-root runtime remain unchanged. The local PR #10 Docker build succeeded, and inspection confirmed the OCI source label.
+
+### Publication policy
+
+| Event | `quality` / `container` checks | Image publication |
+| --- | --- | --- |
+| Pull request targeting `main` | Run | **No** — `publish` is skipped |
+| Push to `main`, any required job fails | Run | **No** — `publish` depends on both jobs |
+| Push to `main`, both required jobs succeed | Run | Authorized to publish to GHCR |
+| Push to another branch | Workflow does not run | No |
+
+The publish job additionally checks that `github.repository` equals `Iyed523/devsecops-secure-pipeline`; this helps prevent publishing in an unintended repository context.
+
+### Export, transfer, and verification
+
+For a trusted push to `main`, the existing `container` job completes its build, smoke test, Trivy scans, and Syft inventory before executing the export steps:
+
+1. Save the **same locally built and scanned image** (`devsecops-secure-pipeline:ci`) using `docker save` to `image.tar`.
+2. Create `image.tar.sha256` and verify it using `sha256sum --check`.
+3. Upload both files as the `scanned-container-image` GitHub Actions artifact with **one-day retention** and `compression-level: 0`.
+
+The new `publish` job requires both `quality` and `container` to succeed. It downloads the archive, checks the recorded SHA-256, and loads the image with `docker load`. It **does not rebuild the Docker image**, avoiding a mismatch between the scanned build and the published build.
+
+The accompanying SHA-256 detects accidental alteration relative to the downloaded checksum file. Because the checksum and archive travel in the same artifact, this is **not** independent cryptographic evidence of image provenance. Artifact access, job isolation, and workflow trust boundaries remain important.
+
+### GHCR authentication, tag, and permissions
+
+The workflow's default permission stays `contents: read`. Only the `publish` job requests:
+
+```yaml
+permissions:
+  contents: read
+  packages: write
+```
+
+Authentication uses the workflow's `GITHUB_TOKEN` with `docker login ghcr.io --password-stdin`; no personal access token is required. The published image receives a tag containing the entire commit SHA:
+
+```text
+ghcr.io/iyed523/devsecops-secure-pipeline:sha-<full-40-character-git-sha>
+```
+
+This makes the image easy to trace to a source revision. Tags remain mutable; the registry digest (`@sha256:...`) is the more precise content identity. Registry image signing and attestations are outside the scope of PR #10.
+
+### First-publication checks and limitations
+
+**Not yet validated:** the GHCR push itself will only be exercised after PR #10 is merged and the trusted `main` workflow runs. During PR review, the publish and scanned-image upload steps should be skipped, while existing CI checks must pass.
+
+After the first `main` publication, verify that the registry package exists, inspect its visibility and access controls, record the published digest, and confirm that the expected SHA-tagged image can be retrieved by an authorized user. A private package is desired initially, but its **actual visibility must be checked in GitHub Packages settings**; do not infer it solely from the repository visibility or Docker label.
+
+- The image and transfer archive are not signed or independently attested.
+- A successful CI gate does not eliminate the existing Debian vulnerability findings.
+- A one-day transfer artifact is temporary and should not be treated as a durable image archive.
+- Package permissions, organization policies, registry availability, and artifact size limits can still cause the initial publish job to fail.
+- No `latest` tag or push to a container registry is performed from untrusted pull requests.
 
 ## Tests and code quality
 
@@ -407,15 +484,15 @@ PR #5 validated clean-history scanning and detection of a fictitious credential 
 
 ## GitHub Actions CI
 
-The workflow is defined in `.github/workflows/ci.yml` and runs on pull requests targeting `main` and pushes to `main`. The default workflow permission is `contents: read`.
+The workflow is defined in `.github/workflows/ci.yml` and runs for pull requests targeting `main` and pushes to `main`. The default workflow permission is `contents: read`.
 
 The independent **`quality`** job performs hash-locked dependency installation, dependency consistency checks, Ruff linting and formatting, Pytest, Bandit, pip-audit, Gitleaks history scanning, and Semgrep rule validation and source scanning.
 
-The **`container`** job builds `linux/amd64` image `devsecops-secure-pipeline:ci`, runs a restricted smoke-test container, checks the exact `/health` response, and removes the temporary container. Since PR #8 it also installs Trivy using a SHA-256-verified download, runs the full HIGH/CRITICAL report, and applies the fixable-vulnerability gate.
+The **`container`** job builds the `linux/amd64` image `devsecops-secure-pipeline:ci`, performs a restricted container smoke test, scans with Trivy, and generates, validates, and uploads a CycloneDX SBOM using Syft. **Both jobs passed on `main` after PR #9 merged** (workflow run #16).
 
-**Both CI jobs passed on PR #8 and on `main` after PR #8 merged.**
+PR #10 adds image transfer steps to `container` for trusted `main` pushes and introduces a third **`publish`** job, which needs both existing jobs to pass. The `publish` job runs only on a push to `main` in the intended repository, checks and loads the previously scanned image archive, authenticates to GHCR using `GITHUB_TOKEN`, and pushes a tag tied to the full Git commit SHA. Only this job receives `packages: write`.
 
-PR #9 adds Syft installation, CycloneDX JSON generation and validation, and seven-day artifact upload to the `container` job. **These new steps have not yet been validated on GitHub Actions.** The CI currently does not push Docker images to a registry.
+**PR #10 status:** the workflow changes are local to the feature branch and have not yet been validated by GitHub Actions. The `publish` job should be skipped during PR validation; the first real GHCR push will occur only after merging to `main` and passing its required checks.
 
 ## Dependency management
 
@@ -434,6 +511,6 @@ The initial design and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-The security pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, and Trivy vulnerability scanning. PR #9 extends the pipeline with Syft-generated SBOM inventory artifacts.
+The security pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. PR #10 proposes controlled image publication to GHCR, after both existing CI jobs succeed.
 
-Outstanding security work includes ongoing review of the 57 locally observed Debian HIGH/CRITICAL findings, deliberate base-image and dependency updates, and SBOM verification on GitHub Actions. Planned future milestones include container registry publishing and the release evaluation endpoint.
+Outstanding security work includes ongoing review of the 57 locally observed Debian HIGH/CRITICAL findings, deliberate base-image and dependency updates, investigation of local/CI SBOM inventory differences, and validation of package visibility and registry digest after the first GHCR publication. The release evaluation endpoint remains a future milestone.
