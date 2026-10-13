@@ -1,5 +1,7 @@
 FROM docker.io/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
 
+LABEL org.opencontainers.image.source="https://github.com/Iyed523/devsecops-secure-pipeline"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -12,7 +14,6 @@ RUN python -m pip install \
     --require-hashes \
     -r requirements.txt \
     && python -m pip uninstall --yes pip
-
 
 COPY src/ ./src/
 
