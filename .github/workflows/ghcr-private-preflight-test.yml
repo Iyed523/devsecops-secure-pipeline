@@ -1,0 +1,69 @@
+name: GHCR Private Package Preflight Test
+
+on:
+  push:
+    branches:
+      - test/ghcr-private-preflight
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  check-private-package:
+    name: Verify private GHCR package access
+    if: github.repository == 'Iyed523/devsecops-secure-pipeline'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify GHCR package visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          response="$RUNNER_TEMP/ghcr-packages.json"
+
+          curl --fail --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --get \
+            --data-urlencode "package_type=container" \
+            --data-urlencode "visibility=private" \
+            --data-urlencode "per_page=100" \
+            --output "$response" \
+            "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "ghcr-packages.json"
+          packages = json.loads(path.read_text(encoding="utf-8"))
+
+          if not isinstance(packages, list):
+              raise SystemExit("Unexpected GitHub Packages API response")
+
+          matches = [
+              package
+              for package in packages
+              if isinstance(package, dict)
+              and package.get("name") == "devsecops-secure-pipeline"
+              and package.get("package_type") == "container"
+              and package.get("visibility") == "private"
+              and isinstance(package.get("owner"), dict)
+              and package["owner"].get("login", "").lower()
+                  == os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          ]
+
+          if len(matches) != 1:
+              raise SystemExit(
+                  "GHCR preflight failed: expected private package "
+                  "not found or not accessible"
+              )
+
+          print("GHCR preflight passed: private package verified")
+          PY
