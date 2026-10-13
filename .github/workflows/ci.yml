@@ -164,3 +164,60 @@ jobs:
             --exit-code 1 \
             --format table \
             devsecops-secure-pipeline:ci
+      - name: Install Syft
+        env:
+          SYFT_VERSION: "1.54.1"
+          SYFT_SHA256: "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
+        run: |
+          archive="$RUNNER_TEMP/syft.tar.gz"
+
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$archive" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+
+          printf '%s  %s\n' "$SYFT_SHA256" "$archive" | sha256sum --check -
+
+          tar -xzf "$archive" -C "$RUNNER_TEMP" syft
+          chmod +x "$RUNNER_TEMP/syft"
+
+          "$RUNNER_TEMP/syft" version
+
+      - name: Generate and validate CycloneDX SBOM
+        run: |
+          "$RUNNER_TEMP/syft" "docker:devsecops-secure-pipeline:ci" \
+            --output "cyclonedx-json=$RUNNER_TEMP/devsecops-secure-pipeline.cdx.json"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "devsecops-secure-pipeline.cdx.json"
+          sbom = json.loads(path.read_text(encoding="utf-8"))
+
+          if sbom.get("bomFormat") != "CycloneDX":
+              raise SystemExit("Invalid CycloneDX BOM format")
+
+          components = sbom.get("components")
+          if not isinstance(components, list) or not components:
+              raise SystemExit("SBOM contains no components")
+
+          metadata = sbom.get("metadata", {}).get("component", {})
+          if metadata.get("type") != "container":
+              raise SystemExit("SBOM target is not identified as a container")
+
+          names = {item.get("name") for item in components if isinstance(item, dict)}
+          missing = {"fastapi", "uvicorn"} - names
+
+          if missing:
+              raise SystemExit(f"Missing application components: {sorted(missing)}")
+
+          print(f"CycloneDX SBOM validated: {len(components)} components")
+          PY
+      - name: Upload CycloneDX SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-sbom-cyclonedx
+          path: ${{ runner.temp }}/devsecops-secure-pipeline.cdx.json
+          if-no-files-found: error
+          retention-days: 7
