@@ -1,3 +1,4 @@
+
 name: GHCR Private Package Preflight Test
 
 on:
@@ -25,7 +26,7 @@ jobs:
 
           response="$RUNNER_TEMP/ghcr-packages.json"
 
-          curl --fail --silent --show-error \
+          http_code="$(curl --silent --show-error \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer ${GH_TOKEN}" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
@@ -34,7 +35,34 @@ jobs:
             --data-urlencode "visibility=private" \
             --data-urlencode "per_page=100" \
             --output "$response" \
-            "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages"
+            --write-out '%{http_code}' \
+            "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages")"
+
+          if [ "$http_code" != "200" ]; then
+            echo "GitHub Packages API returned HTTP $http_code" >&2
+
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "ghcr-packages.json"
+
+          try:
+              data = json.loads(path.read_text(encoding="utf-8"))
+
+              if isinstance(data, dict):
+                  message = data.get("message", "No error message provided")
+              else:
+                  message = "Unexpected API response format"
+
+              print(f"GitHub API error: {message}")
+          except (OSError, ValueError):
+              print("GitHub API error message unavailable")
+          PY
+
+            exit 1
+          fi
 
           python3 - <<'PY'
           import json
