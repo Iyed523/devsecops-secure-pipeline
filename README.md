@@ -6,29 +6,27 @@ The example application, **Release Metadata API**, provides a small, testable fo
 
 ## Current status
 
-**PRs #1 through #7 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff checks, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, and secure Docker containerization. The existing GitHub Actions jobs, **Tests and lint** and **Docker build**, passed on `main` after PR #7.
+**PRs #1 through #8 are merged into `main`.** The project includes a FastAPI health-check endpoint, automated tests, Ruff, SHA-256-hashed dependency lock files, Bandit, pip-audit, Gitleaks, Semgrep, secure Docker containerization, and Trivy image vulnerability scanning. Both GitHub Actions jobs passed on `main` following PR #8 (commit `285936b`).
 
-**PR #8 — Docker Image Vulnerability Scanning with Trivy is in progress** on `feature/trivy-image-scanning`. The proposed changes add Trivy `0.75.0` to the Docker CI job, with a full HIGH/CRITICAL vulnerability report and a separate blocking gate for findings with known fixes. The Linux Trivy archive is pinned by version and SHA-256 checksum.
+**PR #9 — Software Bill of Materials (SBOM) Generation with Syft is in progress** on `feature/sbom-generation`. It adds Syft `1.54.1` to the existing Docker CI job, generates a CycloneDX JSON SBOM, checks its basic structure and expected application components, and uploads it as a GitHub Actions artifact retained for seven days.
 
-Local validation has succeeded: the rebuilt image starts as UID/GID `10001:10001`, serves `/health`, excludes generated `.egg-info` metadata, and runs without pip in its final filesystem. The initial image had **61 HIGH/CRITICAL detections** (57 Debian and four Python-related). The updated image had **57 Debian detections** (55 HIGH and two CRITICAL) and no Python HIGH/CRITICAL detections. The fixable-vulnerability gate returned exit code `0`.
+Local validation of Syft `1.54.1` has succeeded on the PR #8 image: **117 cataloged packages** and **518 CycloneDX components** (112 libraries, 5 applications, 400 files, and 1 operating system). **The new PR #9 CI steps have not yet been validated on GitHub Actions.**
 
-**The new Trivy steps have not yet been validated in GitHub Actions.** The 57 Debian detections remain visible in the full report; they have not been declared resolved or formally accepted.
+The latest local Trivy scan reported **57 Debian HIGH/CRITICAL findings (55 HIGH and 2 CRITICAL)**. None had a fixed version recorded in that report. These findings remain under review; passing the fixable-vulnerability gate does not mean that the image is vulnerability-free.
 
-**Not yet implemented:** standalone SBOM artifact generation, container registry publishing, and the release evaluation endpoint.
+**Not yet implemented on `main`:** standalone SBOM artifact generation (PR #9 in progress), container registry publishing, and the release evaluation endpoint.
 
 ## Technology stack
 
-- Python 3.13
-- FastAPI and Uvicorn
+- Python 3.13, FastAPI, and Uvicorn
 - Pytest and HTTPX
 - Ruff
 - Bandit and pip-audit
 - Gitleaks
 - Semgrep Community Edition
 - Trivy Community Edition
-- pip-tools
-- Docker
-- GitHub Actions
+- Syft (SBOM generation in PR #9)
+- pip-tools, Docker, and GitHub Actions
 
 ## Getting started
 
@@ -36,8 +34,8 @@ Local validation has succeeded: the rebuilt image starts as UID/GID `10001:10001
 
 - Python 3.13
 - Git
-- PowerShell (for the Windows commands below)
-- Docker Desktop using Linux containers (for Docker builds and scans)
+- PowerShell for the Windows commands below
+- Docker Desktop configured to use Linux containers for container builds and scans
 
 ### 1. Clone the repository
 
@@ -62,7 +60,7 @@ python -m pip install --require-hashes -r requirements-dev.txt
 python -m pip check
 ```
 
-The development lock file includes application dependencies and Python testing, quality, and security tools. Gitleaks and Trivy are standalone executables; Semgrep is installed in a separate virtual environment. These three tools are not installed through `requirements-dev.txt`.
+The development lock file includes the application, testing, quality, and Python security dependencies. Gitleaks, Trivy, and Syft are standalone executables; Semgrep is installed in a separate virtual environment. These tools are not installed through `requirements-dev.txt`.
 
 ### 4. Run the API locally
 
@@ -92,9 +90,9 @@ Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Compress
 
 This endpoint confirms that the application responds; it does not check external dependencies or infrastructure health.
 
-## Secure Docker containerization (PR #7 merged; PR #8 hardening in progress)
+## Secure Docker containerization (PRs #7 and #8 merged)
 
-The Dockerfile uses the official `python:3.13-slim-bookworm` image pinned to an OCI index digest, installs only the locked application dependencies with `--require-hashes`, copies the FastAPI source, and runs the application as the non-root numeric user `10001:10001`.
+The Dockerfile uses the official `python:3.13-slim-bookworm` image pinned to an OCI image index digest, installs hash-locked runtime dependencies, copies the FastAPI source, and runs the application as numeric UID/GID `10001:10001`.
 
 Pinned base image:
 
@@ -102,9 +100,9 @@ Pinned base image:
 docker.io/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
 ```
 
-The `.dockerignore` file uses an allowlist for `Dockerfile`, `requirements.txt`, and `src/`. PR #8 further excludes generated `*.egg-info` directories inside `src/`; this exclusion has been checked with a rebuilt image. Git history, virtual environments, and unrelated repository files are excluded from the build context.
+The `.dockerignore` file uses an allowlist for `Dockerfile`, `requirements.txt`, and `src/`, while excluding generated `*.egg-info` metadata. Git history, virtual environments, and unrelated repository files are excluded from the build context.
 
-PR #8 also removes pip from the final container filesystem after dependency installation. The application has been tested successfully without pip. **Uninstalling pip in a single-stage Dockerfile does not remove files from earlier image layers or the inherited base image.**
+After installing dependencies, the Dockerfile uninstalls pip from the final container filesystem. **This does not guarantee removal of pip's contents from inherited or previous image layers.**
 
 ### Build the image
 
@@ -114,7 +112,7 @@ Run from the repository root:
 docker build --platform linux/amd64 --progress=plain -t devsecops-secure-pipeline:local .
 ```
 
-Inspect the resulting image:
+Inspect the image configuration:
 
 ```powershell
 docker image inspect --format '{{.Os}}/{{.Architecture}} User={{.Config.User}}' devsecops-secure-pipeline:local
@@ -148,23 +146,21 @@ docker exec devsecops-local-test id
 docker stop devsecops-local-test
 ```
 
-Expected HTTP response: `{"status":"ok"}`. Expected process identity: `uid=10001 gid=10001 groups=10001`.
-
-With `--rm`, Docker removes the container after it stops.
+Expected health response: `{"status":"ok"}`. Expected identity: `uid=10001 gid=10001 groups=10001`. Docker removes the container after it stops because `--rm` is enabled.
 
 ### Docker security limitations
 
-- A pinned digest prevents an upstream tag from changing the base image silently, but security fixes require an explicit digest update.
-- SHA-256-hashed Python dependencies ensure downloaded distributions match recorded fingerprints; this does not establish that packages are vulnerability-free.
-- Dependencies are installed with build-time root privileges. The application itself runs as UID/GID `10001:10001`.
-- `--read-only`, `--cap-drop=ALL`, and `no-new-privileges` are **runtime settings**, not guarantees enforced by the Dockerfile alone. They are used in the documented command and CI smoke test.
+- The pinned digest prevents unexpected base-image changes, but security fixes require an explicit digest update.
+- Hashes verify downloaded Python distributions against recorded fingerprints; they do not guarantee the absence of vulnerabilities.
+- Dependency installation happens with build-time root privileges; the application runs as UID/GID `10001:10001`.
+- `--read-only`, `--cap-drop=ALL`, and `no-new-privileges` are runtime options applied by the documented commands and CI smoke test, not automatically enforced by the Dockerfile.
 - The current build targets `linux/amd64` and is not published to a container registry.
 
-## Docker image vulnerability scanning (PR #8 in progress)
+## Docker image vulnerability scanning (PR #8 merged)
 
-Trivy scans the Docker image for known vulnerabilities in Debian operating-system packages and Python components. PR #8 uses **Trivy Community Edition `0.75.0`**. The CI installation downloads the official Linux AMD64 archive and verifies its pinned SHA-256 hash before execution.
+Trivy Community Edition `0.75.0` scans the Docker image for known vulnerabilities in operating-system and application packages. The CI installation downloads the Linux AMD64 executable archive and verifies its pinned SHA-256 checksum before execution.
 
-Pinned checksum for `trivy_0.75.0_Linux-64bit.tar.gz`:
+Checksum of `trivy_0.75.0_Linux-64bit.tar.gz`:
 
 ```text
 c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -172,7 +168,7 @@ c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
 
 ### Run a local HIGH/CRITICAL report
 
-First build the current image (as shown in the Docker section). On Windows, after installing and verifying Trivy `0.75.0` outside the repository:
+After building `devsecops-secure-pipeline:local` and separately installing and verifying Trivy outside the repository:
 
 ```powershell
 $trivyExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\trivy-0.75.0\trivy.exe"
@@ -185,7 +181,7 @@ $trivyExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\trivy-0.75.0\trivy.exe"
   devsecops-secure-pipeline:local
 ```
 
-This report shows HIGH and CRITICAL detections, including those without a known fix. `--exit-code 0` makes vulnerability findings non-blocking for reporting; it does **not** mean that the image is secure. Scanner execution errors still require investigation.
+The complete report includes HIGH and CRITICAL findings whether or not a known fix is available. `--exit-code 0` makes vulnerability findings non-blocking for reporting, not the image secure.
 
 ### Run the blocking fixable-vulnerability gate
 
@@ -199,30 +195,140 @@ This report shows HIGH and CRITICAL detections, including those without a known 
   devsecops-secure-pipeline:local
 ```
 
-This check fails when Trivy detects a HIGH or CRITICAL vulnerability for which its data reports a known fix. Vulnerabilities without a known fix are filtered from the **gate only**; they remain visible in the complete report. An exit code of `0` is not evidence of zero vulnerabilities.
+This check fails on HIGH/CRITICAL findings for which Trivy reports a known fix. Findings without a known fix are filtered **from the gate only** and remain visible in the complete report. Exit code `0` does not mean zero vulnerabilities.
 
 ### Local validation results (October 12, 2026)
 
 | Image | Debian HIGH | Debian CRITICAL | Python HIGH | Total HIGH/CRITICAL |
 | --- | ---: | ---: | ---: | ---: |
 | Before PR #8 (`:pr7`) | 55 | 2 | 4 | 61 |
-| After local PR #8 changes (`:pr8`) | 55 | 2 | 0 | 57 |
+| After PR #8 changes (`:pr8`) | 55 | 2 | 0 | 57 |
 
-The four initial Python detections concerned `msgpack 1.1.2`, `setuptools 70.3.0`, and `urllib3 2.7.0` (two findings). They were associated with the CycloneDX SBOM embedded in pip `26.2.1`, rather than packages separately listed by `pip list`. The three components and their versions were verified in `pip/_vendor/bom.cdx.json`.
+The four original Python findings concerned `msgpack 1.1.2`, `setuptools 70.3.0`, and `urllib3 2.7.0` (two findings). They were associated with the CycloneDX SBOM embedded in pip `26.2.1`, rather than separately installed application dependencies. The rebuilt PR #8 image excluded generated `.egg-info` metadata and did not contain pip in its final filesystem.
 
-PR #8 excludes local `.egg-info` metadata from the Docker build context and uninstalls pip after installing runtime dependencies. The rebuilt image successfully answered `/health` as UID/GID `10001:10001`. The complete Trivy scan then reported **57 Debian findings (55 HIGH and two CRITICAL)** and **zero Python HIGH/CRITICAL findings**. The blocking scan with `--ignore-unfixed` returned exit code `0`.
+The updated image returned the expected `/health` response as UID/GID `10001:10001`. Its full scan reported 57 Debian findings, including two CRITICAL entries for `libsqlite3-0` (`CVE-2025-7458`) and `zlib1g` (`CVE-2023-45853`). The local blocking gate returned exit code `0`. The 57 findings had no `FixedVersion` populated in that report; this does not establish that they are harmless, unexploitable, or permanently unfixable.
 
-None of the 57 Debian findings had a `FixedVersion` populated in that local report. The two CRITICAL detections concerned `libsqlite3-0` (`CVE-2025-7458`) and `zlib1g` (`CVE-2023-45853`). Their lack of a recorded fix does **not** make them harmless or establish that mitigations are unnecessary.
+**Both GitHub Actions jobs, including the Trivy steps, passed on PR #8 and on `main` after the merge.**
 
 ### Security scope and residual risks
 
-- The full report is intentionally **non-blocking**; the separate gate is blocking for fixable HIGH/CRITICAL vulnerabilities.
-- Debian findings without a reported fix remain visible and require ongoing review, prioritization, and consideration of upstream advisories and mitigations. They have not been declared resolved or formally accepted.
-- Removing pip from the final filesystem reduces tools accessible at runtime, but does not prove that its vulnerable components have been removed from all image layers.
-- Trivy's vulnerability database and vendor severity classifications evolve. Results may change without changes to application code.
-- A successful scan does not prove the absence of vulnerabilities, and a reported CVE does not by itself prove exploitability in this application.
-- The Trivy CI steps are configured on the PR #8 feature branch but **have not yet been validated in GitHub Actions**.
-- Standalone SBOM artifact generation, registry publication, and a broader image-hardening redesign are outside the scope of PR #8.
+- The full report is non-blocking; the separate gate blocks on fixable HIGH/CRITICAL findings.
+- Debian findings without a recorded fix remain subject to upstream advisory review, prioritization, risk assessment, and mitigation where appropriate. They have not been declared resolved or formally accepted.
+- Uninstalling pip reduces runtime tooling, but may leave bytes in previous image layers.
+- Vulnerability databases, vendor severity ratings, and fix availability change over time.
+- A scanner finding does not by itself establish exploitability; a passing scan does not prove the absence of vulnerabilities.
+
+## Software Bill of Materials (SBOM) generation (PR #9 in progress)
+
+A **Software Bill of Materials (SBOM)** inventories software and related components present in the container image. PR #9 uses **Syft `1.54.1`** to generate a **CycloneDX JSON** report from the built Docker image. A SBOM improves traceability; it is not a vulnerability remediation or proof of security.
+
+The Windows AMD64 Syft archive was downloaded from the official release and verified against the official checksum file during local preparation. The verified archive SHA-256 was:
+
+```text
+8b56e8285e295e0bbed26eeea9b16ed51c493be97ccdf42dae6326c84fe8e19f
+```
+
+The planned CI installation uses the official `syft_1.54.1_linux_amd64.tar.gz` archive, version-pinned and verified before execution against SHA-256:
+
+```text
+c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+```
+
+### Generate a SBOM locally (Windows PowerShell)
+
+Build the current image using the Docker command above. After separately installing and verifying Syft `1.54.1` outside the repository:
+
+```powershell
+$syftExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\syft-1.54.1\syft.exe"
+$sbomPath = Join-Path $env:TEMP "devsecops-secure-pipeline.cdx.json"
+
+& $syftExe version
+& $syftExe "docker:devsecops-secure-pipeline:local" `
+  --output "cyclonedx-json=$sbomPath"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Syft SBOM generation failed."
+}
+```
+
+The output is saved in the Windows temporary directory, **not in the Git repository**.
+
+### Inspect the CycloneDX JSON report
+
+```powershell
+$sbom = Get-Content -LiteralPath $sbomPath -Raw | ConvertFrom-Json
+
+[pscustomobject]@{
+    Format     = $sbom.bomFormat
+    Version    = $sbom.specVersion
+    Components = @($sbom.components).Count
+    Image      = $sbom.metadata.component.name
+} | Format-List
+
+$sbom.components |
+    Group-Object -Property type |
+    Select-Object Name, Count |
+    Format-Table -AutoSize
+```
+
+Check important application and operating-system components:
+
+```powershell
+$expectedNames = @("fastapi", "uvicorn", "libsqlite3-0", "zlib1g")
+
+$sbom.components |
+    Where-Object { $_.name -in $expectedNames } |
+    Select-Object name, version, type |
+    Sort-Object name |
+    Format-Table -AutoSize
+```
+
+### Local validation results (October 13, 2026)
+
+Syft `1.54.1` successfully analyzed the `devsecops-secure-pipeline:pr8` image (image ID beginning `a47eb95de15d`) and produced **CycloneDX 1.7** JSON.
+
+| CycloneDX component type | Count |
+| --- | ---: |
+| `library` | 112 |
+| `application` | 5 |
+| `file` | 400 |
+| `operating-system` | 1 |
+| **Total components** | **518** |
+
+Syft separately reported **117 cataloged packages**, corresponding to the 112 libraries and five applications. It also cataloged 792 executables and file metadata for 400 locations. The local SBOM identified `fastapi 0.143.0`, `uvicorn 0.54.0`, `libsqlite3-0 3.40.1-2+deb12u2`, and `zlib1g 1:1.2.13.dfsg-1`.
+
+These measurements describe the tested `:pr8` image and are **not fixed CI assertions**. Package and component counts can change when the image is updated.
+
+### GitHub Actions integration and artifact
+
+The PR #9 feature branch adds three steps after the existing Trivy checks in the `container` job:
+
+1. **Install Syft:** download the pinned Linux AMD64 archive, verify SHA-256, and execute the verified binary.
+2. **Generate and validate CycloneDX SBOM:** scan `devsecops-secure-pipeline:ci`, parse the JSON, and require a CycloneDX format, a nonempty component list, a container target, and the `fastapi` and `uvicorn` components.
+3. **Upload CycloneDX SBOM:** publish the report as a GitHub Actions artifact using `actions/upload-artifact` pinned to a full commit SHA.
+
+Planned artifact properties:
+
+| Property | Value |
+| --- | --- |
+| Artifact name | `container-sbom-cyclonedx` |
+| File | `devsecops-secure-pipeline.cdx.json` |
+| Format | CycloneDX JSON |
+| Retention | 7 days |
+| Trigger | Pull requests to `main` and pushes to `main`, once PR #9 is merged |
+| Repository permissions | `contents: read` |
+
+After a successful workflow run, the artifact will be available from that run's **Artifacts** section in GitHub Actions, subject to repository permissions and retention policy. The workflow does not commit the SBOM to Git or publish the container image.
+
+**Status:** the Syft steps are configured on `feature/sbom-generation`; their execution, validation, and artifact upload still need to pass on GitHub Actions before PR #9 can be merged. The SBOM artifact is not yet available on `main`.
+
+### SBOM limitations
+
+- A SBOM is an inventory, not a vulnerability scan, exploitability assessment, or remediation.
+- Syft coverage depends on its catalogers, available package metadata, and the scanned image; components may be missed or classified differently.
+- The report captures an image at scan time and should be regenerated when the image changes.
+- The report may reveal package and version information; review access permissions before sharing artifacts.
+- Integrity checks validate downloaded archive bytes against a pinned checksum, but do not replace independent verification of publisher identity or release provenance.
 
 ## Tests and code quality
 
@@ -232,15 +338,10 @@ Run the automated tests:
 python -m pytest -q
 ```
 
-Check Python linting:
+Check linting and formatting:
 
 ```powershell
 python -m ruff check .
-```
-
-Check formatting:
-
-```powershell
 python -m ruff format --check .
 ```
 
@@ -248,29 +349,24 @@ python -m ruff format --check .
 
 ### Python source and dependency scanning
 
-Scan source code with Bandit:
+Scan Python source code with Bandit:
 
 ```powershell
 python -m bandit -r src
 ```
 
-Audit application dependencies:
+Audit application and development dependencies:
 
 ```powershell
 python -m pip_audit -r requirements.txt
-```
-
-Audit development dependencies:
-
-```powershell
 python -m pip_audit -r requirements-dev.txt
 ```
 
-Bandit and pip-audit were integrated in PR #4 and run on pull requests to `main` and pushes to `main`. Bandit detects potentially insecure Python patterns; pip-audit checks dependencies against known vulnerability advisories. Neither guarantees an absence of security issues, and dependency audits depend on vulnerability data availability.
+Bandit and pip-audit were integrated in PR #4. Bandit detects potentially insecure Python patterns, while pip-audit checks dependencies against known vulnerability advisories. Neither guarantees the absence of security issues.
 
 ### Semgrep security scanning
 
-Semgrep complements Bandit with project-specific static security rules. PR #6 integrated Semgrep Community Edition `1.180.0` with two rules stored in `.semgrep/python-security.yml`:
+PR #6 integrated Semgrep Community Edition `1.180.0` with project-specific rules in `.semgrep/python-security.yml`:
 
 - `python-avoid-eval`: detects Python `eval()` calls.
 - `fastapi-no-debug`: detects `FastAPI(debug=True)`.
@@ -284,7 +380,7 @@ $semgrepPython = Join-Path $semgrepDir "Scripts\python.exe"
 & $semgrepPython -m pip install --only-binary=:all: "semgrep==1.180.0"
 ```
 
-Validate the rules and scan the source:
+Validate rules and scan the source:
 
 ```powershell
 $semgrepExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\semgrep-1.180.0\Scripts\semgrep.exe"
@@ -292,50 +388,34 @@ $semgrepExe = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\semgrep-1.180.0\Script
 & $semgrepExe scan --metrics=off --config .semgrep/python-security.yml --error src
 ```
 
-Local validation confirmed both rules were valid and detected two intentionally introduced insecure patterns in a temporary test file, with exit code `1`. No insecure test code was committed. The PR #6 and post-merge CI checks passed; the source scan reported zero findings in two Git-tracked Python files.
-
-The rule set is intentionally narrow. Semgrep does not guarantee comprehensive security coverage. Its primary version is pinned, but transitive installation dependencies are not locked with hashes.
+Local validation confirmed that both rules could detect intentionally introduced insecure patterns in a temporary test file. No insecure test code was committed. PR #6 and its post-merge CI checks passed. This rule set is intentionally narrow; Semgrep cannot guarantee complete vulnerability coverage. Its primary version is pinned, but transitive installation dependencies are not locked with hashes.
 
 ### Git history secret scanning
 
-Gitleaks scans Git history for potential exposed secrets. PR #5 integrated Gitleaks `8.30.0` in CI using a Linux executable archive verified by SHA-256.
+PR #5 integrated Gitleaks `8.30.0`. Its Linux executable archive is SHA-256-verified before installation in CI.
 
-On Windows, after separately installing and verifying Gitleaks at the specified location:
+On Windows, after independently installing and verifying Gitleaks:
 
 ```powershell
 $gitleaks = Join-Path $env:LOCALAPPDATA "DevSecOpsTools\gitleaks-8.30.0\gitleaks.exe"
 & $gitleaks git --redact=100 --log-opts="--all" --no-banner .
 ```
 
-The command checks commits reachable from local Git references, not uncommitted working-tree changes. `--redact=100` masks detected secret values. The workflow checks out Git history with `fetch-depth: 0` and runs Gitleaks as a blocking step.
+This command scans commits reachable from local Git references, not uncommitted working-tree changes. `--redact=100` masks detected secret values. The workflow checks out the complete history with `fetch-depth: 0` and uses Gitleaks as a blocking check.
 
-PR #5 passed both a clean-history scan and a detection test with a fictitious credential passed via standard input. No real or test secrets were committed. Gitleaks can produce false positives and cannot detect every secret. Exposed real credentials must be revoked or rotated, even if removed from source files.
+PR #5 validated clean-history scanning and detection of a fictitious credential without committing it. Gitleaks may produce false positives and cannot detect every secret. Exposed real credentials must be revoked or rotated even if removed from source files.
 
 ## GitHub Actions CI
 
-The workflow is defined in `.github/workflows/ci.yml` and runs on pull requests targeting `main` and on pushes to `main`. The workflow uses `permissions: contents: read`.
+The workflow is defined in `.github/workflows/ci.yml` and runs on pull requests targeting `main` and pushes to `main`. The default workflow permission is `contents: read`.
 
-The **`quality`** job runs:
+The independent **`quality`** job performs hash-locked dependency installation, dependency consistency checks, Ruff linting and formatting, Pytest, Bandit, pip-audit, Gitleaks history scanning, and Semgrep rule validation and source scanning.
 
-- Hash-locked dependency installation and dependency consistency checks
-- Ruff linting and formatting checks
-- Pytest
-- Bandit and pip-audit
-- Gitleaks Git-history secret scanning
-- Semgrep rule validation and source scanning
+The **`container`** job builds `linux/amd64` image `devsecops-secure-pipeline:ci`, runs a restricted smoke-test container, checks the exact `/health` response, and removes the temporary container. Since PR #8 it also installs Trivy using a SHA-256-verified download, runs the full HIGH/CRITICAL report, and applies the fixable-vulnerability gate.
 
-The **`container`** job, introduced by PR #7, runs independently:
+**Both CI jobs passed on PR #8 and on `main` after PR #8 merged.**
 
-1. Build the Docker image for `linux/amd64`.
-2. Start it with a read-only filesystem, dropped Linux capabilities, and `no-new-privileges`.
-3. Poll `http://127.0.0.1:18000/health` and verify the exact response `{"status":"ok"}`.
-4. Clean up the temporary container.
-
-**Both jobs passed on `main` after PR #7.**
-
-PR #8 extends the `container` job with Trivy `0.75.0` installation using an archive with verified SHA-256, followed by a full non-blocking HIGH/CRITICAL vulnerability report and a blocking gate for fixable HIGH/CRITICAL findings.
-
-**The Trivy steps are not yet validated on GitHub Actions.** The pipeline does not publish the Docker image or create a standalone SBOM artifact.
+PR #9 adds Syft installation, CycloneDX JSON generation and validation, and seven-day artifact upload to the `container` job. **These new steps have not yet been validated on GitHub Actions.** The CI currently does not push Docker images to a registry.
 
 ## Dependency management
 
@@ -345,7 +425,7 @@ The project uses three complementary files:
 - `requirements.txt` locks runtime application dependencies.
 - `requirements-dev.txt` locks runtime and development dependencies.
 
-The requirements files are generated using pip-tools and include SHA-256 hashes. Hashes verify the distributions downloaded against recorded fingerprints; they do not guarantee those packages are vulnerability-free.
+The requirements files are generated with pip-tools and include SHA-256 hashes. Hashes verify downloaded distributions against recorded fingerprints; they do not guarantee that the packages are free from vulnerabilities.
 
 ## Architecture and security
 
@@ -354,6 +434,6 @@ The initial design and threat model are documented in:
 - [ADR-001 — Initial Architecture](docs/decisions/ADR-001-architecture-initiale.md)
 - [Threat Model](docs/threat-model.md)
 
-The security pipeline combines code analysis (Bandit and Semgrep), Python dependency auditing (pip-audit), Git history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, and—under development in PR #8—image vulnerability analysis with Trivy.
+The security pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, and Trivy vulnerability scanning. PR #9 extends the pipeline with Syft-generated SBOM inventory artifacts.
 
-Residual container findings remain under review. Future milestones include standalone SBOM artifact generation, container registry publishing, and the release evaluation endpoint.
+Outstanding security work includes ongoing review of the 57 locally observed Debian HIGH/CRITICAL findings, deliberate base-image and dependency updates, and SBOM verification on GitHub Actions. Planned future milestones include container registry publishing and the release evaluation endpoint.
