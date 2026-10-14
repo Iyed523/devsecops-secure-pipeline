@@ -1,5 +1,5 @@
 
-name: GHCR Private Package Preflight Test
+name: GHCR Private Package Access Test
 
 on:
   push:
@@ -12,85 +12,56 @@ permissions:
 
 jobs:
   check-private-package:
-    name: Verify private GHCR package access
+    name: Verify GHCR registry access
     if: github.repository == 'Iyed523/devsecops-secure-pipeline'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
-      - name: Verify GHCR package visibility
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Check anonymous access is denied
         run: |
           set -euo pipefail
 
-          response="$RUNNER_TEMP/ghcr-packages.json"
+          export DOCKER_CONFIG="$RUNNER_TEMP/ghcr-anonymous"
+          mkdir -p "$DOCKER_CONFIG"
 
-          http_code="$(curl --silent --show-error \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --get \
-            --data-urlencode "package_type=container" \
-            --data-urlencode "per_page=100" \
-            --output "$response" \
-            --write-out '%{http_code}' \
-            "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages")"
+          image="ghcr.io/iyed523/devsecops-secure-pipeline:bootstrap-128dfc8"
+          log="$RUNNER_TEMP/anonymous-pull.log"
 
-          if [ "$http_code" != "200" ]; then
-            echo "GitHub Packages API returned HTTP $http_code" >&2
-
-            python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          path = Path(os.environ["RUNNER_TEMP"]) / "ghcr-packages.json"
-
-          try:
-              data = json.loads(path.read_text(encoding="utf-8"))
-
-              if isinstance(data, dict):
-                  message = data.get("message", "No error message provided")
-              else:
-                  message = "Unexpected API response format"
-
-              print(f"GitHub API error: {message}")
-          except (OSError, ValueError):
-              print("GitHub API error message unavailable")
-          PY
-
+          if docker pull "$image" > "$log" 2>&1; then
+            echo "SECURITY FAILURE: anonymous image pull succeeded" >&2
             exit 1
           fi
 
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
+          if ! grep -Eiq \
+            'denied|unauthorized|authentication required|insufficient_scope|forbidden|401|403' \
+            "$log"; then
+            echo "Anonymous pull failed for an unexpected reason:" >&2
+            sed -n '1,15p' "$log" >&2
+            exit 1
+          fi
 
-          path = Path(os.environ["RUNNER_TEMP"]) / "ghcr-packages.json"
-          packages = json.loads(path.read_text(encoding="utf-8"))
+          echo "Anonymous GHCR pull was denied as expected"
 
-          if not isinstance(packages, list):
-              raise SystemExit("Unexpected GitHub Packages API response")
+      - name: Verify authenticated image access
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
 
-          matches = [
-              package
-              for package in packages
-              if isinstance(package, dict)
-              and package.get("name") == "devsecops-secure-pipeline"
-              and package.get("package_type") == "container"
-              and package.get("visibility") == "private"
-              and isinstance(package.get("owner"), dict)
-              and package["owner"].get("login", "").lower()
-                  == os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-          ]
+          export DOCKER_CONFIG="$RUNNER_TEMP/ghcr-authenticated"
+          mkdir -p "$DOCKER_CONFIG"
 
-          if len(matches) != 1:
-              raise SystemExit(
-                  "GHCR preflight failed: expected private package "
-                  "not found or not accessible"
-              )
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
 
-          print("GHCR preflight passed: private package verified")
-          PY
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+          image="ghcr.io/iyed523/devsecops-secure-pipeline:bootstrap-128dfc8"
+
+          docker pull "$image"
+          docker image inspect "$image" > /dev/null
+
+          echo "GITHUB_TOKEN can retrieve the GHCR image"
