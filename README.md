@@ -537,3 +537,19 @@ The initial design and threat model are documented in:
 The pipeline combines source analysis (Bandit and Semgrep), dependency auditing (pip-audit), Git-history secret scanning (Gitleaks), secure Docker packaging, container smoke testing, Trivy vulnerability scanning, and Syft-generated CycloneDX SBOM artifacts. PR #10 introduced GHCR publishing but its first package was public and was removed; PR #11 is hardening the publishing process to enforce the project's **private-only** requirement before resuming automatic publication.
 
 Outstanding security work includes reviewing the 57 locally observed Debian HIGH/CRITICAL findings, deliberately updating the base image and dependencies, investigating local/CI SBOM inventory differences, validating the private GHCR bootstrap and `GITHUB_TOKEN` preflight, and independently verifying registry visibility, access permissions, and image digest after recovery. The release evaluation endpoint remains a future milestone.
+
+## CI/CD security architecture
+
+The public repository runs GitHub Actions CI on pull requests
+and pushes to main. It performs Python tests, security scans,
+Docker builds, vulnerability scans, and SBOM generation.
+
+The public CI workflow does not publish Docker images to GHCR
+and does not require GHCR write permissions.
+
+Container publishing is managed separately by the private
+devsecops-secure-pipeline-publisher repository. Publishing
+requires an explicit manual workflow run with publish_image
+set to true.
+
+The GHCR container package is private.
